@@ -1,20 +1,24 @@
 export
     LennardJones,
-    LennardJonesShifted,
     LennardJonesSoftCoreBeutler,
     LennardJonesSoftCoreGapsys,
     AshbaughHatch
 
 @doc raw"""
-    LennardJones(; cutoff, use_neighbors, shortcut, σ_mixing, ϵ_mixing, weight_special)
+    LennardJones(; cutoff, use_neighbors, shortcut, σ_mixing, ϵ_mixing, weight_special, shift)
 
 The Lennard-Jones 6-12 interaction between two atoms.
 
-The potential energy is defined as
+If `shift` is `false`, the potential energy is defined as
 ```math
 V(r_{ij}) = 4\varepsilon_{ij} \left[\left(\frac{\sigma_{ij}}{r_{ij}}\right)^{12} - \left(\frac{\sigma_{ij}}{r_{ij}}\right)^{6}\right]
 ```
-and the force on each atom by
+else, it is shifted to zero at the cutoff distance
+```math
+V_S(r_{ij}) = V(r_{ij}) - V(r_c)
+```
+
+The force on each atom by
 ```math
 \begin{aligned}
 \vec{F}_i &= 24\varepsilon_{ij} \left(2\frac{\sigma_{ij}^{12}}{r_{ij}^{13}} - \frac{\sigma_{ij}^6}{r_{ij}^{7}}\right) \frac{\vec{r}_{ij}}{r_{ij}} \\
@@ -33,6 +37,7 @@ beyond the cutoff distance.
     σ_mixing::S = lorentz_σ_mixing
     ϵ_mixing::E = geometric_ϵ_mixing
     weight_special::W = 1
+    shift::Bool = false
 end
 
 use_neighbors(inter::LennardJones) = inter.use_neighbors
@@ -135,155 +140,14 @@ end
     end
 end
 
-function pairwise_pe(::LennardJones, r, (σ2, ϵ))
+function pairwise_pe(inter::LennardJones, r, (σ2, ϵ))
     six_term = (σ2 / r^2) ^ 3
-    return 4ϵ * (six_term ^ 2 - six_term)
-end
-
-@doc raw"""
-    LennardJonesShifted(; cutoff, use_neighbors, shortcut, σ_mixing, ϵ_mixing, weight_special)
-
-The shifted Lennard-Jones 6-12 interaction between two atoms, potential is shifted to be continuous at a specified cutoff distance.
-
-The potential energy is defined as
-```math
-V(r_{ij}) = 4\varepsilon_{ij} \left[\left(\frac{\sigma_{ij}}{r_{ij}}\right)^{12} - \left(\frac{\sigma_{ij}}{r_{ij}}\right)^{6}\right] - V(r_c)
-```
-and the force on each atom by
-```math
-\begin{aligned}
-\vec{F}_i &= 24\varepsilon_{ij} \left(2\frac{\sigma_{ij}^{12}}{r_{ij}^{13}} - \frac{\sigma_{ij}^6}{r_{ij}^{7}}\right) \frac{\vec{r}_{ij}}{r_{ij}} \\
-&= \frac{24\varepsilon_{ij}}{r_{ij}^2} \left[2\left(\frac{\sigma_{ij}^{6}}{r_{ij}^{6}}\right)^2 -\left(\frac{\sigma_{ij}}{r_{ij}}\right)^{6}\right] \vec{r}_{ij}
-\end{aligned}
-```
-
-The potential energy does not include the long range dispersion correction present
-in some other implementations that approximately represents contributions from
-beyond the cutoff distance.
-"""
-@kwdef struct LennardJonesShifted{C, H, S, E, V, W} <: PairwiseInteraction
-    cutoff::C = NoCutoff()
-    use_neighbors::Bool = false
-    shortcut::H = lj_zero_shortcut
-    σ_mixing::S = lorentz_σ_mixing
-    ϵ_mixing::E = geometric_ϵ_mixing
-    val_cutoff::V = hardshift
-    weight_special::W = 1
-end
-
-use_neighbors(inter::LennardJonesShifted) = inter.use_neighbors
-function hardshift(rc, σ2, ϵ)
-    six_term = (σ2 / rc^2) ^ 3
-    return 4ϵ * (six_term ^ 2 - six_term)
-end
-
-function Base.zero(lj::LennardJonesShifted{C, H, S, E, V, W}) where {C, H, S, E, V, W}
-    return LennardJonesShifted(
-        lj.cutoff,
-        lj.use_neighbors,
-        lj.shortcut,
-        lj.σ_mixing,
-        lj.ϵ_mixing,
-        lj.val_cutoff,
-        zero(W),
-    )
-end
-
-function Base.:+(l1::LennardJonesShifted, l2::LennardJonesShifted)
-    return LennardJonesShifted(
-        l1.cutoff,
-        l1.use_neighbors,
-        l1.shortcut,
-        l1.σ_mixing,
-        l1.ϵ_mixing,
-        l1.val_cutoff,
-        l1.weight_special + l2.weight_special,
-    )
-end
-
-function inject_interaction(inter::LennardJonesShifted, params_dic)
-    key_prefix = "inter_LJS_"
-    return LennardJonesShifted(
-        inter.cutoff,
-        inter.use_neighbors,
-        inter.shortcut,
-        inter.σ_mixing,
-        inter.ϵ_mixing,
-        inter.val_cutoff,
-        dict_get(params_dic, key_prefix * "weight_14", inter.weight_special),
-    )
-end
-
-function extract_parameters!(params_dic, inter::LennardJonesShifted, ff)
-    key_prefix = "inter_LJS_"
-    params_dic[key_prefix * "weight_14"] = inter.weight_special
-    return params_dic
-end
-
-@inline function force(inter::LennardJonesShifted,
-                       dr,
-                       atom_i,
-                       atom_j,
-                       force_units=u"kJ * mol^-1 * nm^-1",
-                       special=false,
-                       args...)
-    if inter.shortcut(atom_i, atom_j)
-        return ustrip.(zero(dr)) * force_units
-    end
-    σ = inter.σ_mixing(atom_i, atom_j)
-    ϵ = inter.ϵ_mixing(atom_i, atom_j)
-
-    cutoff = inter.cutoff
-    r = norm(dr)
-    σ2 = σ^2
-    params = (σ2, ϵ)
-
-    f = force_cutoff(cutoff, inter, r, params)
-    fdr = (f / r) * dr
-    if special
-        return fdr * inter.weight_special
+    if inter.shift
+        six_term_cutoff = (σ2 / inter.cutoff.dist_cutoff^2) ^ 3
+        return (4ϵ * (six_term ^ 2 - six_term) - 4ϵ * (six_term_cutoff ^ 2 - six_term_cutoff)) * (r <= inter.cutoff.dist_cutoff)
     else
-        return fdr
+        return 4ϵ * (six_term ^ 2 - six_term)
     end
-end
-
-function pairwise_force(::LennardJonesShifted, r, (σ2, ϵ))
-    six_term = (σ2 / r^2) ^ 3
-    return (24ϵ / r) * (2 * six_term ^ 2 - six_term)
-end
-
-@inline function potential_energy(inter::LennardJonesShifted,
-                                  dr,
-                                  atom_i,
-                                  atom_j,
-                                  energy_units=u"kJ * mol^-1",
-                                  special=false,
-                                  args...)
-    if inter.shortcut(atom_i, atom_j)
-        return ustrip(zero(dr[1])) * energy_units
-    end
-    σ = inter.σ_mixing(atom_i, atom_j)
-    ϵ = inter.ϵ_mixing(atom_i, atom_j)
-
-    cutoff = inter.cutoff
-    r = norm(dr)
-    σ2 = σ^2
-    params = (σ2, ϵ)
-
-    pe = pe_cutoff(cutoff, inter, r, params)
-    # apply the shifted potential at the cutoff distance
-    !iszero(pe) && (pe -= inter.val_cutoff(cutoff.dist_cutoff, σ2, ϵ))
-
-    if special
-        return pe * inter.weight_special
-    else
-        return pe
-    end
-end
-
-function pairwise_pe(::LennardJonesShifted, r, (σ2, ϵ))
-    six_term = (σ2 / r^2) ^ 3
-    return 4ϵ * (six_term ^ 2 - six_term)
 end
 
 
