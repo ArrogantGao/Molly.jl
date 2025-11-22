@@ -16,7 +16,9 @@ export
     simulate_remd!,
     MetropolisMonteCarlo,
     random_uniform_translation!,
-    random_normal_translation!
+    random_uniform_translation,
+    random_normal_translation!,
+    random_normal_translation
 
 """
     SteepestDescentMinimizer(; <keyword arguments>)
@@ -1094,6 +1096,12 @@ function random_uniform_translation!(sys::System{D, <:Any, T};
     sys.coords[rand_idx] = wrap_coords(sys.coords[rand_idx] .+ (magnitude * direction), sys.boundary)
     return sys
 end
+function random_uniform_translation(sys::System{D, <:Any, T}; shift_size=oneunit(eltype(eltype(sys.coords))), rng=Random.default_rng()) where {D, T}
+    rand_idx = rand(rng, 1:length(sys.coords))
+    direction = random_unit_vector(T, D, rng)
+    magnitude = rand(rng, T) * shift_size
+    return (rand_idx, magnitude * direction)
+end
 
 """
     random_normal_translation!(sys::System; shift_size=oneunit(eltype(eltype(sys.coords))),
@@ -1113,6 +1121,12 @@ function random_normal_translation!(sys::System{D, <:Any, T};
     magnitude = randn(rng, T) * shift_size
     sys.coords[rand_idx] = wrap_coords(sys.coords[rand_idx] .+ (magnitude * direction), sys.boundary)
     return sys
+end
+function random_normal_translation(sys::System{D, <:Any, T}; shift_size=oneunit(eltype(eltype(sys.coords))), rng=Random.default_rng()) where {D, T}
+    rand_idx = rand(rng, 1:length(sys.coords))
+    direction = random_unit_vector(T, D, rng)
+    magnitude = randn(rng, T) * shift_size
+    return (rand_idx, magnitude * direction)
 end
 
 function random_unit_vector(T, dims, rng=Random.default_rng())
